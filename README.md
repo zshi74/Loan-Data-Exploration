@@ -4,6 +4,7 @@ In this data set, there is a target that we want to predict: does this person ma
 
 More detailed, we want to know how these columns relate to income and what information do they contain that might help us make a prediction. 
 
+You can access the complete report at: https://rpubs.com/zshi4/loaneda
 
 ## Question 1:
 Which race, sex combination is most represented in this data set? Which race, sex combination is least likely to make more than $50K?
