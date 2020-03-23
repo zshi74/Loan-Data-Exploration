@@ -1,0 +1,315 @@
+---
+title: "Data Exploration"
+author: "Zicheng (Stone) Shi"
+date: "2/29/2020"
+output:
+  distill::distill_article:
+    toc: true
+    toc_depth: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Pre-processing
+
+## Read data and load packages
+
+```{r, message=FALSE}
+## read in data and load library
+library(tidyverse)
+
+raw <- read.csv("/Volumes/GoogleDrive/My Drive/University of Notre Dame/MSBA Spring Semester/career/interview/CreditNinja/OA/raw_data.csv")
+glimpse(raw)
+```
+
+## Data cleansing
+
+First, I will do a quick summary of the data set to check outliers and NAs.
+
+```{r}
+summary(raw)
+```
+
+```{r}
+## replace the question marks with NA
+raw$workclass <- gsub("?", NA, raw$workclass, fixed = TRUE)
+raw$native_country <- gsub("?", NA, raw$native_country, fixed = TRUE)
+```
+
+I'll remove those NAs because they only account for 7% of our data. It is safe to drop them.
+
+```{r}
+raw_2 <- raw %>% 
+  filter(!is.na(workclass)) %>% 
+  filter(!is.na(native_country)) %>% 
+  mutate_at(c("workclass", "native_country"), as.factor)
+
+summary(raw_2)
+```
+
+## Class Variable Distribution
+
+```{r}
+raw_2 %>% 
+  ggplot(aes(x = income, fill = income)) +
+  geom_bar()
+```
+
+The class distribution is quite imbalanced, I'll handle this in the later part of analysis.
+
+# Questions 1
+
+**Which race, sex combination is most represented in this data set? Which race, sex combination is least likely to make more than $50K?**
+
+```{r}
+## combine the race and sex columns
+raw_2$Race_Sex <- as.factor(paste(raw_2$race, raw_2$sex, sep = ""))
+table(raw_2$Race_Sex)
+```
+
+Based on the table above, I can see the **White Male** combination is most represented in the data set.
+
+```{r}
+table(raw_2$income)
+table(raw_2$education)
+```
+
+```{r}
+ggplot(raw_2, aes(x = Race_Sex, fill = income)) +
+  geom_bar(position = 'fill') +
+  theme_bw() +
+  theme(axis.text.x  = element_text(angle=60, hjust=1, vjust=0.9)) +
+  labs(x = "Race and Sex Combination")
+```
+
+From the bar chart above we can see, **Other Female** have the lowest percent of making income less than *$50k*, so they are least likely to make more than $50k among those race and sex combinations.
+
+# Question 2
+
+**Are there any columns that can be dropped from this data set without damaging the information contained within the data?**
+
+I'll remove the **education_num** column. The reason is that **education_num** contains the same information as **education**, we can see the more advanced the degree is, the larger the number of education years will be. 
+
+So it is safe for me to drop `education_num` column without damaging the information.
+
+```{r}
+raw_2 <- raw_2 %>% 
+  dplyr::select(-education_num)
+```
+
+# Question 3
+
+**What steps did you take to prepare the data for your analysis and why did you need to do those steps? What tools did you use to do this data preparation and the associated analyses?**
+
+As I've done in my previous steps, before doing data analysis, we need to: 
+
+* Convert data to the proper types (e.g. from character to factor)
+
+* Use various imputation techniques to handle missing data, such as mean imputation, predictive imputation, etc. In my previous preprocessing, I simply dropped these missing values because it only accounts for 7% of the entire data set
+
+* Remove outliers. Outliers will have high leverage and might move the analysis towards another direction
+
+Also, I can check the correlation between continuous variables to see if there is any high correlation.
+
+```{r}
+library(ggcorrplot)
+
+#index vector numeric variables
+numericVars <- which(sapply(raw_2, FUN = is.numeric)) 
+
+#saving names for use later on
+numericVarNames <- names(numericVars) 
+
+cat("There are", length(numericVarNames), "numeric variables")
+```
+
+```{r}
+raw_numVar <- raw_2[, numericVars]
+corr <- cor(raw_numVar, use = 'pairwise.complete.obs')
+
+ggcorrplot(corr, lab = TRUE)
+```
+
+I don't see any high correlation here, so we are good to include them for future analysis.
+
+Another thing I can do with categorical variables is to check their relationship with the class variable. If I see any variable that has low chi-square value and high p-value, I will know the categorical variable is independent on the class variable, so it is useless to include them in the model training stage.
+
+```{r, warning=FALSE, message = FALSE}
+chi.square <- vector()
+p.value <- vector()
+cateVar <- raw_2 %>% 
+  dplyr::select(-income) %>% 
+  purrr::keep(is.factor)
+
+for (i in 1:length(cateVar)) {
+ p.value[i] <- chisq.test(raw_2$income, unname(unlist(cateVar[i])), correct = FALSE)[3]$p.value
+ chi.square[i] <- unname(chisq.test(raw_2$income, unname(unlist(cateVar[i])), correct = FALSE)[1]$statistic)
+}
+
+chi_sqaure_test <- tibble(variable = names(cateVar)) %>% 
+  add_column(chi.square = chi.square) %>% 
+  add_column(p.value = p.value)
+knitr::kable(chi_sqaure_test)
+```
+
+I'll keep all of the categorical variables because they are all dependent on the class variable based on the chi-square test.
+
+# Question 4
+
+**The column “fnlwgt” is a continuous variable that has a complicated, interconnected definition. For this column is a higher value or a lower value more likely to predict high income?**
+
+```{r}
+library(patchwork) # for displaying the plots
+
+fnlwgt_histogram <- ggplot(raw_2, aes(x = fnlwgt, fill = income)) +
+  geom_histogram() +
+  theme_minimal()
+
+fnlwgt_boxplot <- ggplot(raw_2, aes(x = income, y = fnlwgt, fill = income)) +
+  geom_boxplot() + 
+  theme_minimal() +
+  theme(legend.position = 'none')
+
+fnlwgt_histogram | fnlwgt_boxplot
+```
+
+The distribution of these two groups are quite similar. There is no big difference between the mean of two groups.
+
+I'll do a t-test to check if the difference between two groups is significant.
+
+* *Null hypothesis*: the difference between two groups is not significant
+
+* *Alternative hypothesis*: the difference between the two groups is significant 
+
+
+```{r}
+t.test(raw_2$fnlwgt ~ raw_2$income, alternative = "two.sided")
+```
+
+The mean `fnlwgt` of higher income group is lower than the other group, so it is possible that lower fnlwgt value will lead to higher income, but the p-value is 0.11, which is greater than our pre-determined threshold 0.05, so we failed to reject the null hypothesis. We know the mean difference between two groups isn't significant. We won't be able to tell if lower fnlwgt value or higher fnlwgt value will lead to higher income.
+
+
+# Question 5
+
+**If we could only have access to one of the columns (not the target column) and still needed to make an income prediction, which column would you choose and why? What if you could have access to 3 columns?**
+
+There are a lot of feature selection techniques in the wild, such as Lasso, random forest, and xgboost. Here I'll use decision tree to select the best predictor(s) becuase it is simple and fast. 
+
+The decision tree algorithm that I'm going to implement uses *Gini impurity* measure to determine the optimal feature to split upon.
+
+Even though we're not going to do the predictions here, but it is still a good idea to split the data and handle the class imbalanced problem before building the model.
+
+```{r}
+## split the data using a stratified sampling approach.
+library(caTools)
+set.seed(888)
+sample_set <- raw_2 %>%
+  pull(.) %>% 
+  sample.split(SplitRatio = .7)
+
+raw_train <- subset(raw_2, sample_set == TRUE)
+raw_test <- subset(raw_2, sample_set == FALSE)
+```
+
+```{r, message = FALSE}
+## use SMOTE to handle class imbalance
+library(DMwR)
+set.seed(888)
+raw_train <- SMOTE(income ~ ., data.frame(raw_train), perc.over = 100, perc.under = 200)
+```
+
+Then we can put the data into the decision tree model.
+
+```{r, message = FALSE}
+library(rpart)
+library(rpart.plot)
+tree.mod <-
+  rpart(
+    income ~.,
+    method = "class",
+    data = raw_train,
+    control = rpart.control(cp = 0.004)
+  )
+
+rpart.plot(tree.mod)
+```
+
+
+The root node is `age`. So if I can only get access to one column, I will use `age` to try to make the best predictions because it will lead to a best quality of a split. 
+
+
+```{r}
+tree.importance <- tree.mod$variable.importance
+
+#barplot(t(tree.mod$variable.importance),horiz=TRUE)
+
+importance <- as.data.frame(tree.mod$variable.importance)
+
+names(importance) <- c("importance")
+
+importance <- cbind(feature = rownames(importance), importance)
+
+rownames(importance) <- 1:nrow(importance)
+
+importance %>% 
+  arrange(desc(importance)) %>% 
+  top_n(20) %>% 
+  ggplot(aes(x = reorder(feature, importance), y = importance)) +
+  geom_col(fill = "darkseagreen") +
+  coord_flip() +
+  theme_bw() +
+  labs(title = "Feature importance plot", subtitle = "Decision Tree", x= "")
+
+```
+
+
+If I can use three columns, I will use: `age`, `occupation` and `relationship` based on the feature importance (gini impurity measure). 
+
+# Question 6
+
+**What level of education should you achieve if you want to have a better than 50% chance of making more than $50K (per this data set)?**
+
+I'll run `education` on `income` with logistic regression because the coefficent outputs can be converted to probabilities.
+
+```{r}
+logit_mod <- glm(income ~ education, family = binomial(link = "logit"), data = raw_2)
+summary(logit_mod)
+```
+
+The formula can be expressed as:
+
+\[income\ = -2.556 - 0.254 * 11th + 0.098 * 12th - 0.663 * 1st - 4th grade + ... + 3.621 * Prof-school + 1.167 * Some-college\]
+
+I'll convert the log odds to probabilities.
+
+```{r, message = FALSE}
+library(gdata) #for trim
+odds_value <- vector() #store odds
+prob_value <- vector() #store probs
+
+#remove extra space
+education_levels <- trim(levels(raw_2$education)[-1]) 
+
+#add eduction before corresponding grade name
+education_levels <- paste("education", education_levels) 
+                    
+
+for (i in 1:length(education_levels)) {
+  #calculate odds
+  odds_value[i] <- exp(coef(logit_mod)["(Intercept)"] + coef(logit_mod)[education_levels[i]]) 
+  #prob = odds / (1+odds)
+  prob_value[i] <- odds_value[i] / (odds_value[i] + 1) 
+}
+
+#make it as a data frame
+result <- tibble(variable = trim(levels(raw_2$education)[-1])) %>%
+  add_column(odds_value = odds_value) %>% 
+  add_column(prob_value = prob_value) %>% 
+  arrange(desc(prob_value))
+
+knitr::kable(result)
+```
+
+Based on the result table, we can see if you want to have a better than 50% chance of making more than $50k, you should achieve at least a master degree. 
